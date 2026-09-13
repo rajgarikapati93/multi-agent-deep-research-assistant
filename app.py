@@ -191,9 +191,20 @@ st.set_page_config(page_title="Multi-Agent Deep Research Assistant", layout="wid
 st.title("🔎 Multi-Agent Deep Research Assistant")
 st.caption("Planner → Parallel Researchers → Critic → Writer, built with LangGraph")
 
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
+
 question = st.text_area("Enter a research question:", height=100, placeholder="e.g. Compare EV strategies of Tesla, BYD, and Tata Motors")
 
-if st.button("Run Research", type="primary"):
+col1, col2 = st.columns([1, 5])
+with col1:
+    run_clicked = st.button("Run Research", type="primary")
+with col2:
+    if st.button("New Question"):
+        st.session_state.last_result = None
+        st.rerun()
+
+if run_clicked:
     if not question.strip():
         st.warning("Please enter a question first.")
     else:
@@ -201,15 +212,19 @@ if st.button("Run Research", type="primary"):
         with st.spinner("Planning, researching, verifying, and writing..."):
             try:
                 result = graph.invoke({"user_input": question, "question": question})
-                st.markdown(result["report"])
-
-                with st.expander("See critic's verification details"):
-                    for v in result["critic_report"].verifications:
-                        status = "✅ OK" if v.is_well_supported else f"⚠️ FLAGGED — {v.issue}"
-                        st.write(f"**{v.sub_question}**: {status}")
-                    if result["critic_report"].contradictions:
-                        st.write("**Contradictions found:**")
-                        for c in result["critic_report"].contradictions:
-                            st.write(f"- {c}")
+                st.session_state.last_result = result
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
+
+if st.session_state.last_result:
+    result = st.session_state.last_result
+    st.markdown(result["report"])
+    with st.expander("See critic's verification details"):
+        for v in result["critic_report"].verifications:
+            status = "✅ OK" if v.is_well_supported else f"⚠️ FLAGGED — {v.issue}"
+            st.write(f"**{v.sub_question}**: {status}")
+        if result["critic_report"].contradictions:
+            st.write("**Contradictions found:**")
+            for c in result["critic_report"].contradictions:
+                st.write(f"- {c}")
+            
