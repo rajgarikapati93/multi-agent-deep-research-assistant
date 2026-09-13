@@ -183,7 +183,6 @@ def build_graph():
 
     return builder.compile()
 
-
 # ---------------------------------------------------------------------------
 # 5. STREAMLIT UI
 # ---------------------------------------------------------------------------
@@ -193,8 +192,15 @@ st.caption("Planner → Parallel Researchers → Critic → Writer, built with L
 
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
+if "question_input" not in st.session_state:
+    st.session_state.question_input = ""
 
-question = st.text_area("Enter a research question:", height=100, placeholder="e.g. Compare EV strategies of Tesla, BYD, and Tata Motors")
+question = st.text_area(
+    "Enter a research question:",
+    height=100,
+    placeholder="e.g. Compare EV strategies of Tesla, BYD, and Tata Motors",
+    key="question_input"
+)
 
 col1, col2 = st.columns([1, 5])
 with col1:
@@ -202,6 +208,7 @@ with col1:
 with col2:
     if st.button("New Question"):
         st.session_state.last_result = None
+        st.session_state.question_input = ""
         st.rerun()
 
 if run_clicked:
@@ -227,4 +234,3 @@ if st.session_state.last_result:
             st.write("**Contradictions found:**")
             for c in result["critic_report"].contradictions:
                 st.write(f"- {c}")
-            
