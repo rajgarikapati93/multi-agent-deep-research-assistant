@@ -208,25 +208,79 @@ st.set_page_config(page_title="Multi-Agent Deep Research Assistant", layout="wid
 st.title("🔎 Multi-Agent Deep Research Assistant")
 st.caption("Planner → Parallel Researchers → Critic → Writer, built with LangGraph")
 
-question = st.text_area("Enter a research question:", height=100, placeholder="e.g. Compare EV strategies of Tesla, BYD, and Tata Motors")
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
+if "question_input" not in st.session_state:
+    st.session_state.question_input = ""
+if "pending_clarification" not in st.session_state:
+    st.session_state.pending_clarification = None
 
-if st.button("Run Research", type="primary"):
+if st.session_state.pending_clarification:
+    st.info(f"❓ {st.session_state.pending_clarification['clarifying_question']}")
+
+question = st.text_area(
+    "Enter a research question:" if not st.session_state.pending_clarification else "Your clarification:",
+    height=100,
+    placeholder="e.g. Compare EV strategies of Tesla, BYD, and Tata Motors",
+    key="question_input"
+)
+
+col1, col2 = st.columns([1, 5])
+with col1:
+    run_clicked = st.button("Run Research", type="primary")
+with col2:
+    if st.button("New Question"):
+        st.session_state.last_result = None
+        st.session_state.question_input = ""
+        st.session_state.pending_clarification = None
+        st.rerun()
+
+if run_clicked:
     if not question.strip():
-        st.warning("Please enter a question first.")
-    else:
+        st.warning("Please enter something first.")
+    elif st.session_state.pending_clarification:
+        full_question = (
+            f"{st.session_state.pending_clarification['original_question']} "
+            f"(Clarification: {question.strip()})"
+        )
+        st.session_state.pending_clarification = None
         graph = build_graph()
         with st.spinner("Planning, researching, verifying, and writing..."):
             try:
-                result = graph.invoke({"user_input": question, "question": question})
-                st.markdown(result["report"])
-
-                with st.expander("See critic's verification details"):
-                    for v in result["critic_report"].verifications:
-                        status = "✅ OK" if v.is_well_supported else f"⚠️ FLAGGED — {v.issue}"
-                        st.write(f"**{v.sub_question}**: {status}")
-                    if result["critic_report"].contradictions:
-                        st.write("**Contradictions found:**")
-                        for c in result["critic_report"].contradictions:
-                            st.write(f"- {c}")
+                result = graph.invoke({"user_input": full_question, "question": full_question})
+                st.session_state.last_result = result
+                st.session_state.question_input = ""
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
+        st.rerun()
+    else:
+        ambiguity = check_ambiguity(question.strip())
+        if ambiguity.is_ambiguous:
+            st.session_state.pending_clarification = {
+                "original_question": question.strip(),
+                "clarifying_question": ambiguity.clarifying_question,
+            }
+            st.session_state.question_input = ""
+            st.rerun()
+        else:
+            graph = build_graph()
+            with st.spinner("Planning, researching, verifying, and writing..."):
+                try:
+                    result = graph.invoke({"user_input": question.strip(), "question": question.strip()})
+                    st.session_state.last_result = result
+                    st.session_state.question_input = ""
+                except Exception as e:
+                    st.error(f"Something went wrong: {e}")
+            st.rerun()
+
+if st.session_state.last_result:
+    result = st.session_state.last_result
+    st.markdown(result["report"])
+    with st.expander("See critic's verification details"):
+        for v in result["critic_report"].verifications:
+            status = "✅ OK" if v.is_well_supported else f"⚠️ FLAGGED — {v.issue}"
+            st.write(f"**{v.sub_question}**: {status}")
+        if result["critic_report"].contradictions:
+            st.write("**Contradictions found:**")
+            for c in result["critic_report"].contradictions:
+                st.write(f"- {c}")
