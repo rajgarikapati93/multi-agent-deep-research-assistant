@@ -53,7 +53,6 @@ class ResearchState(BaseModel):
     critic_report: CriticReport | None = None
     report: str = ""
 
-
 class SubQuestions(BaseModel):
     sub_questions: list[str] = Field(
         min_length=1,
@@ -61,6 +60,9 @@ class SubQuestions(BaseModel):
         description="1 to 6 focused, non-overlapping sub-questions that together cover the original research question. Use 1 if the question is already narrow and doesn't need decomposition."
     )
 
+class AmbiguityCheck(BaseModel):
+    is_ambiguous: bool = Field(description="True only if the input has multiple plausible, meaningfully different real-world interpretations, such that guessing wrong would produce a useless report")
+    clarifying_question: str = Field(default="", description="If ambiguous, one short, specific question to resolve it. Empty string otherwise.")
 
 # ---------------------------------------------------------------------------
 # 3. HELPER: safely extract plain text from an LLM response
@@ -75,7 +77,22 @@ def extract_text(content):
         )
     return str(content)
 
+@st.cache_resource
+def get_ambiguity_checker():
+    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite", temperature=0)
+    return llm.with_structured_output(AmbiguityCheck)
 
+
+def check_ambiguity(user_input: str) -> AmbiguityCheck:
+    checker = get_ambiguity_checker()
+    prompt = (
+        f"A user submitted this research request: \"{user_input}\"\n\n"
+        f"Decide if this is genuinely ambiguous — i.e. it contains a name, acronym, or term with multiple "
+        f"plausible, meaningfully different real-world meanings, such that researching the wrong one would "
+        f"produce a useless report. Only flag it if there's a real risk of misinterpretation, not for every "
+        f"vague-sounding question. If ambiguous, propose one short, specific clarifying question."
+    )
+    return checker.invoke(prompt)
 # ---------------------------------------------------------------------------
 # 4. GRAPH CONSTRUCTION (built once, cached across Streamlit reruns)
 # ---------------------------------------------------------------------------
