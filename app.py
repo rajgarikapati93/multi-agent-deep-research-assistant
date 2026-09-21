@@ -206,9 +206,16 @@ def build_graph():
             "\n".join(f"- {c}" for c in state.critic_report.contradictions)
             if state.critic_report.contradictions else "None found."
         )
-        unresearched_text = (
-            "\n".join(f"- {f.sub_question}" for f in ungrounded_findings)
-            if ungrounded_findings else "None."
+
+        # Only inject an "Areas Not Covered" instruction when there's actually something
+        # to report — otherwise the writer has no instruction to react to, so it can't
+        # generate an empty/pointless version of that section.
+        areas_not_covered_instruction = (
+            f"The following sub-questions could NOT be researched due to lack of usable search results:\n"
+            + "\n".join(f"- {f.sub_question}" for f in ungrounded_findings) + "\n\n"
+            f"End the report with a brief 'Areas Not Covered' section listing these sub-questions in one or "
+            f"two lines each.\n\n"
+            if ungrounded_findings else ""
         )
 
         prompt = (
@@ -218,10 +225,9 @@ def build_graph():
             f"away relevant facts, figures, or context):\n{findings_text}\n\n"
             f"Critic's verification results (per finding):\n{verification_text}\n\n"
             f"Critic's flagged contradictions between findings:\n{contradiction_text}\n\n"
-            f"The following sub-questions could NOT be researched due to lack of usable search results:\n{unresearched_text}\n\n"
-            f"IMPORTANT: Do not create a full section for any sub-question with no real findings. Instead, "
-            f"end the report with a brief 'Areas Not Covered' section listing those sub-questions in one or two "
-            f"lines each. If any INCLUDED finding was flagged as not well-supported, or a contradiction was found, "
+            f"{areas_not_covered_instruction}"
+            f"IMPORTANT: Do not create a full section for any sub-question with no real findings. "
+            f"If any INCLUDED finding was flagged as not well-supported, or a contradiction was found, "
             f"mention this transparently at the relevant point — do not silently omit, hide, or resolve it yourself. "
             f"If a finding was flagged because it answers a DIFFERENT or BROADER scope than its sub-question asked "
             f"for, do not present its content as if it directly answers that sub-question — instead, clearly "
