@@ -223,6 +223,10 @@ def build_graph():
             f"end the report with a brief 'Areas Not Covered' section listing those sub-questions in one or two "
             f"lines each. If any INCLUDED finding was flagged as not well-supported, or a contradiction was found, "
             f"mention this transparently at the relevant point — do not silently omit, hide, or resolve it yourself. "
+            f"If a finding was flagged because it answers a DIFFERENT or BROADER scope than its sub-question asked "
+            f"for, do not present its content as if it directly answers that sub-question — instead, clearly "
+            f"reframe that section as related context that was found instead of a direct answer, and briefly note "
+            f"what the sub-question actually needed that wasn't found. "
             f"Include source URLs where relevant. Write in clear, professional prose with section headers."
         )
         report_text = extract_text(llm.invoke(prompt).content)
