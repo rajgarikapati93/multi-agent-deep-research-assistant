@@ -22,7 +22,11 @@ os.environ["TAVILY_API_KEY"] = st.secrets["TAVILY_API_KEY"]
 # ---------------------------------------------------------------------------
 class Finding(BaseModel):
     sub_question: str
-    answer: str = Field(description="A concise, well-supported answer to the sub-question, based only on the search results provided")
+    answer: str = Field(
+        description="A thorough, detailed answer to the sub-question, covering all relevant facts, "
+                    "figures, and context found in the search results. Do not omit relevant details "
+                    "for the sake of brevity."
+    )
     sources: list[str] = Field(description="URLs of the sources that support the answer")
     is_grounded: bool = Field(default=True, description="Automatically set to False if no sources were found")
 
@@ -67,6 +71,10 @@ class AmbiguityCheck(BaseModel):
     clarifying_question: str = Field(default="", description="If ambiguous, one short, specific question to resolve it. Empty string otherwise.")
 
 
+class QuestionCheck(BaseModel):
+    is_research_question: bool = Field(description="True if this is genuinely asking to research/investigate/compare something. False if it's a statement, instruction, suggestion, or greeting that isn't asking for research.")
+
+
 # ---------------------------------------------------------------------------
 # 3. HELPERS
 # ---------------------------------------------------------------------------
@@ -79,6 +87,23 @@ def extract_text(content):
             for block in content
         )
     return str(content)
+
+
+@st.cache_resource
+def get_question_checker():
+    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite", temperature=0)
+    return llm.with_structured_output(QuestionCheck)
+
+
+def check_is_question(user_input: str) -> QuestionCheck:
+    checker = get_question_checker()
+    prompt = (
+        f"A user typed this into a research assistant: \"{user_input}\"\n\n"
+        f"Decide if this is genuinely a request to research, investigate, compare, or find information about "
+        f"something. It is NOT a research question if it's a statement of fact/preference, an instruction "
+        f"(e.g. 'skip that', 'focus on X instead'), a suggestion, a greeting, or general chat."
+    )
+    return checker.invoke(prompt)
 
 
 @st.cache_resource
@@ -100,7 +125,7 @@ def check_ambiguity(user_input: str) -> AmbiguityCheck:
 
 
 # ---------------------------------------------------------------------------
-# 4. GRAPH CONSTRUCTION (unchanged from V1)
+# 4. GRAPH CONSTRUCTION
 # ---------------------------------------------------------------------------
 @st.cache_resource
 def build_graph():
@@ -108,14 +133,15 @@ def build_graph():
     llm_planner = llm.with_structured_output(SubQuestions)
     llm_researcher = llm.with_structured_output(Finding)
     llm_critic = llm.with_structured_output(CriticReport)
-    search_tool = TavilySearch(max_results=5)
+    search_tool = TavilySearch(max_results=8)
 
     def research_one(sub_question: str) -> Finding:
         search_results = search_tool.invoke(sub_question)
         prompt = (
             f"Sub-question: {sub_question}\n\n"
             f"Search results:\n{search_results}\n\n"
-            f"Based only on these search results, provide a concise answer with source URLs."
+            f"Based only on these search results, provide a thorough, detailed answer covering all "
+            f"relevant facts and figures, with source URLs. Do not compress or omit relevant details."
         )
         return llm_researcher.invoke(prompt)
 
@@ -165,9 +191,12 @@ def build_graph():
         return {"critic_report": report.model_copy(update={"verifications": corrected})}
 
     def writer(state: ResearchState) -> dict:
+        grounded_findings = [f for f in state.findings if f.is_grounded]
+        ungrounded_findings = [f for f in state.findings if not f.is_grounded]
+
         findings_text = "\n\n".join(
             f"Sub-question: {f.sub_question}\nAnswer: {f.answer}\nSources: {', '.join(f.sources) if f.sources else 'None'}"
-            for f in state.findings
+            for f in grounded_findings
         )
         verification_text = "\n".join(
             f"- {v.sub_question}: {'OK' if v.is_well_supported else 'FLAGGED - ' + v.issue}"
@@ -177,14 +206,23 @@ def build_graph():
             "\n".join(f"- {c}" for c in state.critic_report.contradictions)
             if state.critic_report.contradictions else "None found."
         )
+        unresearched_text = (
+            "\n".join(f"- {f.sub_question}" for f in ungrounded_findings)
+            if ungrounded_findings else "None."
+        )
+
         prompt = (
-            f"Write a coherent, well-organized research report answering this question:\n{state.question}\n\n"
-            f"Base the report on these findings:\n{findings_text}\n\n"
+            f"Write a coherent, THOROUGH, in-depth research report answering this question:\n{state.question}\n\n"
+            f"Base the report ONLY on these well-grounded findings, giving each its own detailed section "
+            f"(aim for roughly 150-250 words per section, more if the finding supports it — do not summarize "
+            f"away relevant facts, figures, or context):\n{findings_text}\n\n"
             f"Critic's verification results (per finding):\n{verification_text}\n\n"
             f"Critic's flagged contradictions between findings:\n{contradiction_text}\n\n"
-            f"IMPORTANT: If any finding was flagged as not well-supported, or any contradiction was found, "
-            f"you MUST transparently mention this in the report at the relevant point — do not silently omit, "
-            f"hide, or resolve it yourself. The reader should know when the evidence was thin or conflicting. "
+            f"The following sub-questions could NOT be researched due to lack of usable search results:\n{unresearched_text}\n\n"
+            f"IMPORTANT: Do not create a full section for any sub-question with no real findings. Instead, "
+            f"end the report with a brief 'Areas Not Covered' section listing those sub-questions in one or two "
+            f"lines each. If any INCLUDED finding was flagged as not well-supported, or a contradiction was found, "
+            f"mention this transparently at the relevant point — do not silently omit, hide, or resolve it yourself. "
             f"Include source URLs where relevant. Write in clear, professional prose with section headers."
         )
         report_text = extract_text(llm.invoke(prompt).content)
@@ -245,6 +283,8 @@ if run_clicked:
     if not question.strip():
         st.warning("Please enter something first.")
     elif st.session_state.pending_clarification:
+        # This input answers a pending clarifying question — skip the guard/ambiguity checks
+        # and go straight to research using the combined question.
         full_question = (
             f"{st.session_state.pending_clarification['original_question']} "
             f"(Clarification: {question.strip()})"
@@ -260,24 +300,31 @@ if run_clicked:
                 st.error(f"Something went wrong: {e}")
         st.rerun()
     else:
-        ambiguity = check_ambiguity(question.strip())
-        if ambiguity.is_ambiguous:
-            st.session_state.pending_clarification = {
-                "original_question": question.strip(),
-                "clarifying_question": ambiguity.clarifying_question,
-            }
-            st.session_state.input_version += 1
-            st.rerun()
+        q_check = check_is_question(question.strip())
+        if not q_check.is_research_question:
+            st.warning(
+                "This looks like a statement or instruction rather than a research question. "
+                "Try rephrasing it as something to research — e.g. 'What is Tesla's EV strategy?'"
+            )
         else:
-            graph = build_graph()
-            with st.spinner("Planning, researching, verifying, and writing..."):
-                try:
-                    result = graph.invoke({"user_input": question.strip(), "question": question.strip()})
-                    st.session_state.last_result = result
-                    st.session_state.input_version += 1
-                except Exception as e:
-                    st.error(f"Something went wrong: {e}")
-            st.rerun()
+            ambiguity = check_ambiguity(question.strip())
+            if ambiguity.is_ambiguous:
+                st.session_state.pending_clarification = {
+                    "original_question": question.strip(),
+                    "clarifying_question": ambiguity.clarifying_question,
+                }
+                st.session_state.input_version += 1
+                st.rerun()
+            else:
+                graph = build_graph()
+                with st.spinner("Planning, researching, verifying, and writing..."):
+                    try:
+                        result = graph.invoke({"user_input": question.strip(), "question": question.strip()})
+                        st.session_state.last_result = result
+                        st.session_state.input_version += 1
+                    except Exception as e:
+                        st.error(f"Something went wrong: {e}")
+                st.rerun()
 
 if st.session_state.last_result:
     result = st.session_state.last_result
