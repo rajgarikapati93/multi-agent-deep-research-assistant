@@ -11,14 +11,14 @@ from langchain_tavily import TavilySearch
 
 
 # ---------------------------------------------------------------------------
-# 1. API KEYS (from Streamlit Cloud's secrets manager, not hardcoded)
+# 1. API KEYS
 # ---------------------------------------------------------------------------
 os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 os.environ["TAVILY_API_KEY"] = st.secrets["TAVILY_API_KEY"]
 
 
 # ---------------------------------------------------------------------------
-# 2. SCHEMAS (unchanged from the Colab build)
+# 2. SCHEMAS
 # ---------------------------------------------------------------------------
 class Finding(BaseModel):
     sub_question: str
@@ -53,6 +53,7 @@ class ResearchState(BaseModel):
     critic_report: CriticReport | None = None
     report: str = ""
 
+
 class SubQuestions(BaseModel):
     sub_questions: list[str] = Field(
         min_length=1,
@@ -60,12 +61,14 @@ class SubQuestions(BaseModel):
         description="1 to 6 focused, non-overlapping sub-questions that together cover the original research question. Use 1 if the question is already narrow and doesn't need decomposition."
     )
 
+
 class AmbiguityCheck(BaseModel):
     is_ambiguous: bool = Field(description="True only if the input has multiple plausible, meaningfully different real-world interpretations, such that guessing wrong would produce a useless report")
     clarifying_question: str = Field(default="", description="If ambiguous, one short, specific question to resolve it. Empty string otherwise.")
 
+
 # ---------------------------------------------------------------------------
-# 3. HELPER: safely extract plain text from an LLM response
+# 3. HELPERS
 # ---------------------------------------------------------------------------
 def extract_text(content):
     if isinstance(content, str):
@@ -76,6 +79,7 @@ def extract_text(content):
             for block in content
         )
     return str(content)
+
 
 @st.cache_resource
 def get_ambiguity_checker():
@@ -93,8 +97,10 @@ def check_ambiguity(user_input: str) -> AmbiguityCheck:
         f"vague-sounding question. If ambiguous, propose one short, specific clarifying question."
     )
     return checker.invoke(prompt)
+
+
 # ---------------------------------------------------------------------------
-# 4. GRAPH CONSTRUCTION (built once, cached across Streamlit reruns)
+# 4. GRAPH CONSTRUCTION (unchanged from V1)
 # ---------------------------------------------------------------------------
 @st.cache_resource
 def build_graph():
@@ -178,8 +184,8 @@ def build_graph():
             f"Critic's flagged contradictions between findings:\n{contradiction_text}\n\n"
             f"IMPORTANT: If any finding was flagged as not well-supported, or any contradiction was found, "
             f"you MUST transparently mention this in the report at the relevant point — do not silently omit, "
-            f"hide, or resolve it yourself. Include source URLs where relevant. Write in clear, professional "
-            f"prose with section headers."
+            f"hide, or resolve it yourself. The reader should know when the evidence was thin or conflicting. "
+            f"Include source URLs where relevant. Write in clear, professional prose with section headers."
         )
         report_text = extract_text(llm.invoke(prompt).content)
         return {"report": report_text}
@@ -210,8 +216,8 @@ st.caption("Planner → Parallel Researchers → Critic → Writer, built with L
 
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
-if "question_input" not in st.session_state:
-    st.session_state.question_input = ""
+if "input_version" not in st.session_state:
+    st.session_state.input_version = 0
 if "pending_clarification" not in st.session_state:
     st.session_state.pending_clarification = None
 
@@ -222,7 +228,7 @@ question = st.text_area(
     "Enter a research question:" if not st.session_state.pending_clarification else "Your clarification:",
     height=100,
     placeholder="e.g. Compare EV strategies of Tesla, BYD, and Tata Motors",
-    key="question_input"
+    key=f"question_input_{st.session_state.input_version}"
 )
 
 col1, col2 = st.columns([1, 5])
@@ -231,8 +237,8 @@ with col1:
 with col2:
     if st.button("New Question"):
         st.session_state.last_result = None
-        st.session_state.question_input = ""
         st.session_state.pending_clarification = None
+        st.session_state.input_version += 1
         st.rerun()
 
 if run_clicked:
@@ -249,7 +255,7 @@ if run_clicked:
             try:
                 result = graph.invoke({"user_input": full_question, "question": full_question})
                 st.session_state.last_result = result
-                st.session_state.question_input = ""
+                st.session_state.input_version += 1
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
         st.rerun()
@@ -260,7 +266,7 @@ if run_clicked:
                 "original_question": question.strip(),
                 "clarifying_question": ambiguity.clarifying_question,
             }
-            st.session_state.question_input = ""
+            st.session_state.input_version += 1
             st.rerun()
         else:
             graph = build_graph()
@@ -268,7 +274,7 @@ if run_clicked:
                 try:
                     result = graph.invoke({"user_input": question.strip(), "question": question.strip()})
                     st.session_state.last_result = result
-                    st.session_state.question_input = ""
+                    st.session_state.input_version += 1
                 except Exception as e:
                     st.error(f"Something went wrong: {e}")
             st.rerun()
